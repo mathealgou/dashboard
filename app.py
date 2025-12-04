@@ -1,3 +1,4 @@
+import re
 import time
 
 import psutil
@@ -64,12 +65,106 @@ def _cpu_temperature_c():
     return None
 
 
+def _canonical_device(device):
+    """Map a partition device path to its underlying physical device."""
+    if not device:
+        return None
+
+    patterns = (
+        re.compile(r"(?P<base>/dev/nvme\d+n\d+)p\d+$"),
+        re.compile(r"(?P<base>/dev/mmcblk\d+)p\d+$"),
+        re.compile(r"(?P<base>/dev/(?:sd|hd|vd|xvd)[a-z]+)\d+$"),
+    )
+    for pattern in patterns:
+        match = pattern.match(device)
+        if match:
+            return match.group("base")
+    general = re.match(r"(?P<base>/dev/[a-zA-Z]+)\d+$", device)
+    if general:
+        return general.group("base")
+    return device
+
+
+def _disk_usage_all():
+    """Collect usage information aggregated per physical disk."""
+    aggregates = {}
+    try:
+        partitions = psutil.disk_partitions(all=False)
+    except Exception:  # pragma: no cover - defensive
+        partitions = []
+
+    seen_mounts = set()
+    for part in partitions:
+        mount = part.mountpoint
+        device = part.device
+        if not mount or not device or mount in seen_mounts:
+            continue
+        if not device.startswith("/dev/"):
+            continue
+        seen_mounts.add(mount)
+        try:
+            usage = psutil.disk_usage(mount)
+        except (PermissionError, FileNotFoundError, OSError):
+            continue
+        key = _canonical_device(device) or device
+        bucket = aggregates.setdefault(
+            key,
+            {
+                "device": key,
+                "mounts": set(),
+                "fstypes": set(),
+                "total": 0,
+                "used": 0,
+            },
+        )
+        bucket["mounts"].add(mount)
+        if part.fstype:
+            bucket["fstypes"].add(part.fstype)
+        bucket["total"] += usage.total
+        bucket["used"] += usage.used
+
+    disks = []
+    for bucket in aggregates.values():
+        total = bucket["total"]
+        used = min(bucket["used"], total)
+        percent = (used / total * 100) if total else 0
+        disks.append(
+            {
+                "device": bucket["device"],
+                "mountpoint": ", ".join(sorted(bucket["mounts"]))
+                or bucket["device"],
+                "fstype": ", ".join(sorted(bucket["fstypes"])),
+                "total": total,
+                "used": used,
+                "percent": percent,
+            }
+        )
+
+    if not disks:
+        try:
+            usage = psutil.disk_usage("/")
+        except (PermissionError, FileNotFoundError, OSError):
+            return disks
+        disks.append(
+            {
+                "device": "/",
+                "mountpoint": "/",
+                "fstype": "",
+                "total": usage.total,
+                "used": usage.used,
+                "percent": usage.percent,
+            }
+        )
+
+    return sorted(disks, key=lambda item: item["device"])
+
+
 @app.route("/api/system")
 def system_info():
     """Expose basic system metrics for the dashboard."""
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
     uptime_seconds = max(0, time.time() - psutil.boot_time())
+    disks = _disk_usage_all()
     payload = {
         "cpu": {
             "usage_percent": psutil.cpu_percent(interval=None),
@@ -80,11 +175,7 @@ def system_info():
             "used": mem.used,
             "percent": mem.percent,
         },
-        "disk": {
-            "total": disk.total,
-            "used": disk.used,
-            "percent": disk.percent,
-        },
+        "disks": disks,
         "uptime_seconds": uptime_seconds,
     }
     return jsonify(payload)

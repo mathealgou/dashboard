@@ -97,6 +97,32 @@
 				color: #cbd5f5;
 			}
 
+			.disk-list {
+				display: flex;
+				flex-direction: column;
+				gap: 0.75rem;
+			}
+
+			.disk-entry {
+				background: rgba(255, 255, 255, 0.04);
+				padding: 0.75rem;
+				border-radius: 0.4rem;
+				border: 1px solid #1f2933;
+			}
+
+			.disk-entry-header {
+				display: flex;
+				justify-content: space-between;
+				font-size: 0.9rem;
+				color: #cbd5f5;
+				margin-bottom: 0.35rem;
+			}
+
+			.disk-entry .metric-value {
+				font-size: 1.3rem;
+				margin: 0 0 0.35rem;
+			}
+
 			table {
 				width: 100%;
 				border-collapse: collapse;
@@ -173,11 +199,9 @@
 				</div>
 				<div class="metric-card">
 					<p class="metric-label">Disk</p>
-					<p class="metric-value" id="disk-usage-value">—%</p>
-					<div class="bar">
-						<div class="bar-fill" id="disk-usage-bar"></div>
+					<div id="disk-list" class="disk-list">
+						<p class="metric-subtext">Collecting disk data…</p>
 					</div>
-					<p class="metric-subtext" id="disk-detail">— / —</p>
 				</div>
 				<div class="metric-card">
 					<p class="metric-label">Uptime</p>
@@ -230,9 +254,7 @@
 				memoryValue: document.getElementById("memory-usage-value"),
 				memoryBar: document.getElementById("memory-usage-bar"),
 				memoryDetail: document.getElementById("memory-detail"),
-				diskValue: document.getElementById("disk-usage-value"),
-				diskBar: document.getElementById("disk-usage-bar"),
-				diskDetail: document.getElementById("disk-detail"),
+				diskList: document.getElementById("disk-list"),
 				uptimeValue: document.getElementById("uptime-value"),
 				updated: document.getElementById("system-updated"),
 			};
@@ -261,6 +283,41 @@
 					return;
 				}
 				element.style.width = `${clampPercent(percent)}%`;
+			}
+
+			function renderDisks(disks) {
+				const container = systemElements.diskList;
+				if (!container) {
+					return;
+				}
+				container.innerHTML = "";
+				if (!Array.isArray(disks) || disks.length === 0) {
+					const empty = document.createElement("p");
+					empty.className = "metric-subtext";
+					empty.textContent = "No disk data available";
+					container.appendChild(empty);
+					return;
+				}
+				disks.forEach((disk) => {
+					const entry = document.createElement("div");
+					entry.className = "disk-entry";
+					const percent = Math.round(disk.percent ?? 0);
+					const safeMount = disk.mountpoint || disk.device || "Disk";
+					const metaParts = [disk.device, disk.fstype].filter(Boolean);
+					const metaLabel = metaParts.join(" • ") || "\u00a0";
+					entry.innerHTML = `
+						<div class="disk-entry-header">
+							<span>${safeMount}</span>
+							<span>${metaLabel}</span>
+						</div>
+						<p class="metric-value">${percent}%</p>
+						<div class="bar">
+							<div class="bar-fill" style="width: ${clampPercent(percent)}%"></div>
+						</div>
+						<p class="metric-subtext">${formatBytes(disk.used)} / ${formatBytes(disk.total)}</p>
+					`;
+					container.appendChild(entry);
+				});
 			}
 
 			function formatBytes(bytes) {
@@ -295,15 +352,13 @@
 				const fallback = message || "Unavailable";
 				systemElements.cpuValue.textContent = fallback;
 				systemElements.memoryValue.textContent = fallback;
-				systemElements.diskValue.textContent = fallback;
 				systemElements.memoryDetail.textContent = fallback;
-				systemElements.diskDetail.textContent = fallback;
 				systemElements.cpuTemp.textContent = "Temp: —";
 				systemElements.uptimeValue.textContent = fallback;
 				systemElements.updated.textContent = "—";
 				updateBar(systemElements.cpuBar, 0);
 				updateBar(systemElements.memoryBar, 0);
-				updateBar(systemElements.diskBar, 0);
+				renderDisks([]);
 			}
 
 			async function pollServices() {
@@ -351,12 +406,7 @@
 						payload.memory?.used
 					)} / ${formatBytes(payload.memory?.total)}`;
 
-					const diskPercent = Math.round(payload.disk?.percent ?? 0);
-					systemElements.diskValue.textContent = `${diskPercent}%`;
-					updateBar(systemElements.diskBar, diskPercent);
-					systemElements.diskDetail.textContent = `${formatBytes(
-						payload.disk?.used
-					)} / ${formatBytes(payload.disk?.total)}`;
+					renderDisks(payload.disks);
 
 					systemElements.uptimeValue.textContent = formatDuration(
 						payload.uptime_seconds
