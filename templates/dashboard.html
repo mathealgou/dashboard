@@ -20,6 +20,22 @@
 				color: #f8fafc;
 			}
 
+			.weather-banner {
+				margin-bottom: 1.5rem;
+				padding: 0.65rem 1rem;
+				border-radius: 0.35rem;
+				background: rgba(15, 23, 42, 0.95);
+				border: 1px solid rgba(148, 163, 184, 0.25);
+				font-size: 1rem;
+				letter-spacing: 0.05em;
+				text-transform: uppercase;
+			}
+
+			.weather-banner.weather-error {
+				border-color: rgba(248, 113, 113, 0.8);
+				color: #fecaca;
+			}
+
 			h1 {
 				font-size: 2.5rem;
 				margin-bottom: 1.5rem;
@@ -176,6 +192,9 @@
 		</style>
 	</head>
 	<body>
+		<div id="weather-banner" class="weather-banner">
+			<span id="weather-text">Loading Florianopolis weather…</span>
+		</div>
 		<h1>Infeliz3000 Dashboard</h1>
 		<section>
 			<div class="section-header">
@@ -239,6 +258,11 @@
 		</section>
 
 		<script>
+			const weatherElements = {
+				container: document.getElementById("weather-banner"),
+				text: document.getElementById("weather-text"),
+			};
+
 			const services = {{ services | tojson }};
 
 			const statusClasses = {
@@ -417,13 +441,49 @@
 				}
 			}
 
+			function setWeatherMessage(message, isError = false) {
+				if (!weatherElements.text || !weatherElements.container) {
+					return;
+				}
+				weatherElements.text.textContent = message;
+				weatherElements.container.classList.toggle("weather-error", isError);
+			}
+
+			async function pollWeather() {
+				try {
+					const response = await fetch("/api/weather");
+					if (!response.ok) {
+						throw new Error("Weather fetch failed");
+					}
+					const payload = await response.json();
+					const temp = Number.isFinite(payload.temperature_c)
+						? `${payload.temperature_c}°C`
+						: null;
+					const summary = [payload.location, temp, payload.condition]
+						.filter(Boolean)
+						.join(" • ");
+					const humidity = payload.humidity ? ` • Humidity ${payload.humidity}` : "";
+					const feels = Number.isFinite(payload.apparent_temperature_c)
+						? ` • Feels like ${payload.apparent_temperature_c}°C`
+						: "";
+					if (!summary) {
+						throw new Error("Incomplete weather payload");
+					}
+					setWeatherMessage(summary + feels + humidity, false);
+				} catch (error) {
+					setWeatherMessage("Weather data unavailable", true);
+				}
+			}
+
 			function startPolling() {
 				pollServices();
 				pollSystem();
+				pollWeather();
 				setInterval(() => {
 					pollServices();
 					pollSystem();
 				}, 3000);
+				setInterval(pollWeather, 300000);
 			}
 
 			startPolling();
